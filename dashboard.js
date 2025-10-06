@@ -2316,7 +2316,7 @@ function closeAllModals() {
 //  Status Reports
 // ==================
 function generateStatusReport() {
-    console.log('[REPORT] Generating status report');
+    console.log('[REPORT] Generating comprehensive status report');
     
     const reportModal = document.getElementById('report-modal');
     const reportContent = document.getElementById('report-content');
@@ -2326,198 +2326,360 @@ function generateStatusReport() {
     }
 
     const now = new Date();
-    now.setHours(0, 0, 0, 0); // Normalize to start of day
+    now.setHours(0, 0, 0, 0);
     
-    // Filter overdue projects with proper date handling
-    const overdueProjects = allProjects.filter(p => {
-        const finalDeadline = p.deadlines ? p.deadlines.publication : p.deadline;
-        if (!finalDeadline) return false;
+    // Group projects and tasks by user
+    const userWorkload = {};
+    
+    // Initialize all users
+    allUsers.forEach(user => {
+        userWorkload[user.id] = {
+            name: user.name,
+            role: user.role || 'member',
+            email: user.email,
+            projects: [],
+            tasks: [],
+            overdue: 0,
+            onTrack: 0,
+            completed: 0
+        };
+    });
+    
+    // Categorize projects
+    allProjects.forEach(project => {
+        const state = getProjectState(project, currentView, currentUser);
+        const finalDeadline = project.deadlines ? project.deadlines.publication : project.deadline;
         
-        try {
-            const deadline = new Date(finalDeadline + 'T00:00:00');
-            if (isNaN(deadline.getTime())) return false;
-            
-            const state = getProjectState(p, currentView, currentUser);
-            return deadline < now && 
-                   state.column !== 'Completed' && 
-                   !state.statusText.includes('Completed');
-        } catch (error) {
-            console.error('[REPORT] Error checking project deadline:', error);
-            return false;
+        let status = 'on-track';
+        let daysUntilDeadline = null;
+        
+        if (finalDeadline) {
+            try {
+                const deadline = new Date(finalDeadline + 'T00:00:00');
+                if (!isNaN(deadline.getTime())) {
+                    daysUntilDeadline = Math.ceil((deadline - now) / (1000 * 60 * 60 * 24));
+                    
+                    if (state.column === 'Completed' || state.statusText.includes('Completed')) {
+                        status = 'completed';
+                    } else if (daysUntilDeadline < 0) {
+                        status = 'overdue';
+                    } else if (daysUntilDeadline <= 3) {
+                        status = 'due-soon';
+                    }
+                }
+            } catch (error) {
+                console.error('[REPORT] Error processing project deadline:', error);
+            }
+        }
+        
+        const projectInfo = {
+            id: project.id,
+            title: project.title,
+            type: project.type,
+            status: status,
+            state: state.statusText,
+            deadline: finalDeadline,
+            daysUntilDeadline: daysUntilDeadline,
+            proposalStatus: project.proposalStatus
+        };
+        
+        // Add to author's workload
+        if (project.authorId && userWorkload[project.authorId]) {
+            userWorkload[project.authorId].projects.push(projectInfo);
+            if (status === 'overdue') userWorkload[project.authorId].overdue++;
+            else if (status === 'completed') userWorkload[project.authorId].completed++;
+            else userWorkload[project.authorId].onTrack++;
+        }
+        
+        // Add to editor's workload
+        if (project.editorId && userWorkload[project.editorId]) {
+            userWorkload[project.editorId].projects.push(projectInfo);
+            if (status === 'overdue') userWorkload[project.editorId].overdue++;
+            else if (status === 'completed') userWorkload[project.editorId].completed++;
+            else userWorkload[project.editorId].onTrack++;
         }
     });
-
-    const pendingProposals = allProjects.filter(p => p.proposalStatus === 'pending');
-    const completedProjects = allProjects.filter(p => {
-        const state = getProjectState(p, currentView, currentUser);
-        return state.column === 'Completed' || state.statusText.includes('Completed');
-    });
     
-    // Filter overdue tasks with proper date handling
-    const overdueTasks = allTasks.filter(t => {
-        if (!t.deadline) return false;
+    // Categorize tasks
+    allTasks.forEach(task => {
+        let status = 'on-track';
+        let daysUntilDeadline = null;
         
-        try {
-            const deadline = new Date(t.deadline + 'T00:00:00');
-            if (isNaN(deadline.getTime())) return false;
-            
-            return deadline < now && t.status !== 'completed';
-        } catch (error) {
-            console.error('[REPORT] Error checking task deadline:', error);
-            return false;
+        if (task.deadline) {
+            try {
+                const deadline = new Date(task.deadline + 'T00:00:00');
+                if (!isNaN(deadline.getTime())) {
+                    daysUntilDeadline = Math.ceil((deadline - now) / (1000 * 60 * 60 * 24));
+                    
+                    if (task.status === 'completed') {
+                        status = 'completed';
+                    } else if (daysUntilDeadline < 0) {
+                        status = 'overdue';
+                    } else if (daysUntilDeadline <= 3) {
+                        status = 'due-soon';
+                    }
+                }
+            } catch (error) {
+                console.error('[REPORT] Error processing task deadline:', error);
+            }
         }
+        
+        const taskInfo = {
+            id: task.id,
+            title: task.title,
+            status: status,
+            taskStatus: task.status,
+            deadline: task.deadline,
+            daysUntilDeadline: daysUntilDeadline,
+            priority: task.priority || 'medium'
+        };
+        
+        // Add to all assignees
+        const assigneeIds = task.assigneeIds || [task.assigneeId];
+        assigneeIds.forEach(assigneeId => {
+            if (assigneeId && userWorkload[assigneeId]) {
+                userWorkload[assigneeId].tasks.push(taskInfo);
+                if (status === 'overdue') userWorkload[assigneeId].overdue++;
+                else if (status === 'completed') userWorkload[assigneeId].completed++;
+                else userWorkload[assigneeId].onTrack++;
+            }
+        });
     });
     
-    const pendingTasks = allTasks.filter(t => t.status === 'pending');
-    const completedTasks = allTasks.filter(t => t.status === 'completed');
-    const inProgressTasks = allTasks.filter(t => t.status === 'approved');
+    // Calculate overall statistics
+    const totalOverdue = Object.values(userWorkload).reduce((sum, user) => sum + user.overdue, 0);
+    const totalOnTrack = Object.values(userWorkload).reduce((sum, user) => sum + user.onTrack, 0);
+    const totalCompleted = Object.values(userWorkload).reduce((sum, user) => sum + user.completed, 0);
+    const activeUsers = Object.values(userWorkload).filter(u => u.projects.length > 0 || u.tasks.length > 0).length;
     
-    console.log('[REPORT] Overdue projects:', overdueProjects.length);
-    console.log('[REPORT] Overdue tasks:', overdueTasks.length);
-    console.log('[REPORT] Pending proposals:', pendingProposals.length);
-    
+    // Start building report HTML
     let reportHTML = `
-        <div class="report-section executive-summary">
-            <h2>🎯 Executive Dashboard</h2>
-            <div class="summary-grid">
-                <div class="summary-item total">
-                    <div class="summary-value">${allProjects.length}</div>
-                    <div class="summary-label">Total Projects</div>
-                </div>
-                <div class="summary-item ${overdueProjects.length > 0 ? 'overdue' : ''}">
-                    <div class="summary-value">${overdueProjects.length}</div>
-                    <div class="summary-label">Overdue Projects</div>
-                </div>
-                <div class="summary-item completed">
-                    <div class="summary-value">${completedProjects.length}</div>
-                    <div class="summary-label">Completed Projects</div>
-                </div>
-                <div class="summary-item total">
-                    <div class="summary-value">${allTasks.length}</div>
-                    <div class="summary-label">Total Tasks</div>
-                </div>
-            </div>
+        <div class="report-header">
+            <h2>📊 Comprehensive Team Status Report</h2>
+            <p class="report-date">Generated: ${new Date().toLocaleString('en-US', { 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            })}</p>
         </div>
         
-        <div class="report-section">
-            <h2>📋 Task Overview</h2>
+        <div class="report-section executive-summary">
+            <h2>🎯 Executive Summary</h2>
             <div class="summary-grid">
-                <div class="summary-item ${overdueTasks.length > 0 ? 'overdue' : ''}">
-                    <div class="summary-value">${overdueTasks.length}</div>
-                    <div class="summary-label">Overdue Tasks</div>
+                <div class="summary-item total">
+                    <div class="summary-icon">👥</div>
+                    <div class="summary-value">${activeUsers}</div>
+                    <div class="summary-label">Active Team Members</div>
                 </div>
-                <div class="summary-item ${pendingTasks.length > 0 ? 'pending' : ''}">
-                    <div class="summary-value">${pendingTasks.length}</div>
-                    <div class="summary-label">Pending Approval</div>
+                <div class="summary-item ${totalOverdue > 0 ? 'overdue' : ''}">
+                    <div class="summary-icon">⚠️</div>
+                    <div class="summary-value">${totalOverdue}</div>
+                    <div class="summary-label">Overdue Items</div>
+                </div>
+                <div class="summary-item on-track">
+                    <div class="summary-icon">🎯</div>
+                    <div class="summary-value">${totalOnTrack}</div>
+                    <div class="summary-label">On Track</div>
                 </div>
                 <div class="summary-item completed">
-                    <div class="summary-value">${completedTasks.length}</div>
-                    <div class="summary-label">Completed Tasks</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-value">${inProgressTasks.length}</div>
-                    <div class="summary-label">In Progress</div>
+                    <div class="summary-icon">✅</div>
+                    <div class="summary-value">${totalCompleted}</div>
+                    <div class="summary-label">Completed</div>
                 </div>
             </div>
         </div>
     `;
-
-    // Actions Required Section
-    if (overdueProjects.length > 0 || overdueTasks.length > 0 || pendingProposals.length > 0) {
+    
+    // Team member details - sorted by workload
+    const sortedUsers = Object.values(userWorkload)
+        .filter(u => u.projects.length > 0 || u.tasks.length > 0)
+        .sort((a, b) => {
+            // Sort by overdue first, then total workload
+            if (b.overdue !== a.overdue) return b.overdue - a.overdue;
+            return (b.projects.length + b.tasks.length) - (a.projects.length + a.tasks.length);
+        });
+    
+    if (sortedUsers.length > 0) {
         reportHTML += `
-            <div class="report-section">
-                <h2>🚨 Actions Required</h2>
+            <div class="report-section team-details">
+                <h2>👥 Team Member Breakdown</h2>
         `;
         
-        // Overdue Projects
-        if (overdueProjects.length > 0) {
-            reportHTML += `<h3>Overdue Projects (${overdueProjects.length})</h3>`;
-            reportHTML += overdueProjects.map(p => {
-                const deadline = p.deadlines ? p.deadlines.publication : p.deadline;
-                let daysPast = 0;
+        sortedUsers.forEach(user => {
+            const totalItems = user.projects.length + user.tasks.length;
+            const workloadLevel = totalItems > 10 ? 'high' : totalItems > 5 ? 'medium' : 'low';
+            const performanceClass = user.overdue > 0 ? 'needs-attention' : user.onTrack > user.completed ? 'in-progress' : 'excellent';
+            
+            reportHTML += `
+                <div class="user-card ${performanceClass}">
+                    <div class="user-card-header">
+                        <div class="user-info">
+                            <div class="user-avatar" style="background-color: ${stringToColor(user.name)}">
+                                ${user.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                                <h3>${escapeHtml(user.name)}</h3>
+                                <p class="user-role">${escapeHtml(user.role)}</p>
+                            </div>
+                        </div>
+                        <div class="workload-indicator ${workloadLevel}">
+                            <div class="workload-count">${totalItems}</div>
+                            <div class="workload-label">Total Items</div>
+                        </div>
+                    </div>
+                    
+                    <div class="user-stats">
+                        <div class="stat-item ${user.overdue > 0 ? 'overdue' : ''}">
+                            <span class="stat-icon">⚠️</span>
+                            <span class="stat-value">${user.overdue}</span>
+                            <span class="stat-label">Overdue</span>
+                        </div>
+                        <div class="stat-item on-track">
+                            <span class="stat-icon">🎯</span>
+                            <span class="stat-value">${user.onTrack}</span>
+                            <span class="stat-label">On Track</span>
+                        </div>
+                        <div class="stat-item completed">
+                            <span class="stat-icon">✅</span>
+                            <span class="stat-value">${user.completed}</span>
+                            <span class="stat-label">Done</span>
+                        </div>
+                    </div>
+            `;
+            
+            // Projects section
+            if (user.projects.length > 0) {
+                reportHTML += `
+                    <div class="user-work-section">
+                        <h4>📝 Projects (${user.projects.length})</h4>
+                        <div class="work-items">
+                `;
                 
-                try {
-                    const deadlineDate = new Date(deadline + 'T00:00:00');
-                    if (!isNaN(deadlineDate.getTime())) {
-                        daysPast = Math.ceil((now - deadlineDate) / (1000 * 60 * 60 * 24));
-                    }
-                } catch (error) {
-                    console.error('[REPORT] Error calculating days past:', error);
-                }
+                user.projects.forEach(project => {
+                    const deadlineText = project.daysUntilDeadline !== null 
+                        ? (project.daysUntilDeadline < 0 
+                            ? `${Math.abs(project.daysUntilDeadline)} days overdue` 
+                            : `${project.daysUntilDeadline} days remaining`)
+                        : 'No deadline';
+                    
+                    reportHTML += `
+                        <div class="work-item ${project.status}" data-id="${project.id}" onclick="openDetailsModal('${project.id}'); closeAllModals();">
+                            <div class="work-item-header">
+                                <span class="work-item-title">${escapeHtml(project.title)}</span>
+                                <span class="work-item-type">${escapeHtml(project.type)}</span>
+                            </div>
+                            <div class="work-item-meta">
+                                <span class="work-item-status">${escapeHtml(project.state)}</span>
+                                <span class="work-item-deadline ${project.status}">${deadlineText}</span>
+                            </div>
+                        </div>
+                    `;
+                });
                 
-                return `
-                    <div class="report-item overdue-item" data-id="${p.id}">
-                        <span>${escapeHtml(p.title)}</span>
-                        <span class="meta">${daysPast} day${daysPast !== 1 ? 's' : ''} overdue</span>
+                reportHTML += `
+                        </div>
                     </div>
                 `;
-            }).join('');
-        }
-        
-        // Overdue Tasks
-        if (overdueTasks.length > 0) {
-            reportHTML += `<h3>Overdue Tasks (${overdueTasks.length})</h3>`;
-            reportHTML += overdueTasks.map(t => {
-                let daysPast = 0;
+            }
+            
+            // Tasks section
+            if (user.tasks.length > 0) {
+                reportHTML += `
+                    <div class="user-work-section">
+                        <h4>📋 Tasks (${user.tasks.length})</h4>
+                        <div class="work-items">
+                `;
                 
-                try {
-                    const deadlineDate = new Date(t.deadline + 'T00:00:00');
-                    if (!isNaN(deadlineDate.getTime())) {
-                        daysPast = Math.ceil((now - deadlineDate) / (1000 * 60 * 60 * 24));
-                    }
-                } catch (error) {
-                    console.error('[REPORT] Error calculating task days past:', error);
-                }
+                user.tasks.forEach(task => {
+                    const deadlineText = task.daysUntilDeadline !== null 
+                        ? (task.daysUntilDeadline < 0 
+                            ? `${Math.abs(task.daysUntilDeadline)} days overdue` 
+                            : `${task.daysUntilDeadline} days remaining`)
+                        : 'No deadline';
+                    
+                    reportHTML += `
+                        <div class="work-item ${task.status}" data-id="${task.id}" data-type="task" onclick="openTaskDetailsModal('${task.id}'); closeAllModals();">
+                            <div class="work-item-header">
+                                <span class="work-item-title">${escapeHtml(task.title)}</span>
+                                <span class="priority-badge ${task.priority}">${task.priority.toUpperCase()}</span>
+                            </div>
+                            <div class="work-item-meta">
+                                <span class="work-item-status">${escapeHtml(task.taskStatus)}</span>
+                                <span class="work-item-deadline ${task.status}">${deadlineText}</span>
+                            </div>
+                        </div>
+                    `;
+                });
                 
-                const assigneeNames = getTaskAssigneeNames(t);
-                return `
-                    <div class="report-item overdue-item" data-id="${t.id}" data-type="task">
-                        <span>${escapeHtml(t.title)} (assigned to ${escapeHtml(assigneeNames.join(', '))})</span>
-                        <span class="meta">${daysPast} day${daysPast !== 1 ? 's' : ''} overdue</span>
+                reportHTML += `
+                        </div>
                     </div>
                 `;
-            }).join('');
-        }
+            }
+            
+            reportHTML += `</div>`; // Close user-card
+        });
         
-        // Pending Proposals
-        if (pendingProposals.length > 0) {
-            reportHTML += `<h3>Pending Proposals (${pendingProposals.length})</h3>`;
-            reportHTML += pendingProposals.map(p => `
-                <div class="report-item pending-item" data-id="${p.id}">
-                    <span>${escapeHtml(p.title)}</span>
-                    <span class="meta">by ${escapeHtml(p.authorName)}</span>
-                </div>
-            `).join('');
-        }
-        
-        reportHTML += `</div>`;
-    } else {
+        reportHTML += `</div>`; // Close team-details section
+    }
+    
+    // Recommendations section
+    reportHTML += `
+        <div class="report-section recommendations">
+            <h2>💡 Recommendations</h2>
+            <div class="recommendation-list">
+    `;
+    
+    const highWorkloadUsers = sortedUsers.filter(u => (u.projects.length + u.tasks.length) > 10);
+    const overdueUsers = sortedUsers.filter(u => u.overdue > 0);
+    
+    if (overdueUsers.length > 0) {
         reportHTML += `
-            <div class="report-section">
-                <div style="text-align: center; padding: 40px; color: #10b981;">
-                    <h2>✅ All Clear!</h2>
-                    <p style="margin-top: 12px; color: #64748b;">No overdue items or pending approvals at this time.</p>
+            <div class="recommendation-item urgent">
+                <span class="recommendation-icon">🚨</span>
+                <div>
+                    <h4>Immediate Attention Required</h4>
+                    <p>${overdueUsers.map(u => u.name).join(', ')} ${overdueUsers.length === 1 ? 'has' : 'have'} overdue items that need immediate attention.</p>
                 </div>
             </div>
         `;
     }
-
+    
+    if (highWorkloadUsers.length > 0) {
+        reportHTML += `
+            <div class="recommendation-item warning">
+                <span class="recommendation-icon">⚖️</span>
+                <div>
+                    <h4>High Workload Alert</h4>
+                    <p>${highWorkloadUsers.map(u => u.name).join(', ')} ${highWorkloadUsers.length === 1 ? 'has' : 'have'} a high number of assignments. Consider redistributing workload.</p>
+                </div>
+            </div>
+        `;
+    }
+    
+    if (overdueUsers.length === 0 && totalOnTrack > totalCompleted) {
+        reportHTML += `
+            <div class="recommendation-item success">
+                <span class="recommendation-icon">🎉</span>
+                <div>
+                    <h4>Team On Track</h4>
+                    <p>No overdue items! The team is making good progress. Keep up the great work!</p>
+                </div>
+            </div>
+        `;
+    }
+    
+    reportHTML += `
+            </div>
+        </div>
+    `;
+    
     reportContent.innerHTML = reportHTML;
-
-    // Add click handlers to report items
-    reportContent.querySelectorAll('[data-id]').forEach(item => {
-        item.addEventListener('click', () => {
-            closeAllModals();
-            if (item.dataset.type === 'task') {
-                openTaskDetailsModal(item.dataset.id);
-            } else {
-                openDetailsModal(item.dataset.id);
-            }
-        });
-    });
-
     reportModal.style.display = 'flex';
-    console.log('[REPORT] Status report displayed successfully');
+    console.log('[REPORT] Comprehensive status report generated successfully');
 }
 
 // ==================
