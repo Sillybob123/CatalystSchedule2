@@ -1046,13 +1046,31 @@ function createTaskCard(task) {
 function openTaskDetailsModal(taskId) {
     const task = allTasks.find(t => t.id === taskId);
     if (!task) {
-        console.error("[MODAL] Task not found:", taskId);
+        console.error('[MODAL] Task not found:', taskId);
+        showNotification('Task not found. Please refresh the page.', 'error');
         return;
     }
     
+    console.log('[MODAL] Opening details for task:', task.title);
     currentlyViewedTaskId = taskId;
-    refreshTaskDetailsModal(task);
-    document.getElementById('task-details-modal').style.display = 'flex';
+    
+    // Clear any existing content first to prevent blur
+    const modal = document.getElementById('task-details-modal');
+    const content = modal.querySelector('.details-container');
+    if (content) {
+        content.style.opacity = '0';
+    }
+    
+    // Show modal immediately
+    modal.style.display = 'flex';
+    
+    // Refresh content with slight delay for smooth transition
+    requestAnimationFrame(() => {
+        refreshTaskDetailsModal(task);
+        if (content) {
+            content.style.opacity = '1';
+        }
+    });
 }
 
 function refreshTaskDetailsModal(task) {
@@ -1312,10 +1330,32 @@ function openProjectModal() {
 
 function openDetailsModal(projectId) {
     const project = allProjects.find(p => p.id === projectId);
-    if (!project) return;
+    if (!project) {
+        console.error('[MODAL] Project not found:', projectId);
+        showNotification('Project not found. Please refresh the page.', 'error');
+        return;
+    }
+    
+    console.log('[MODAL] Opening details for project:', project.title);
     currentlyViewedProjectId = projectId;
-    refreshDetailsModal(project);
-    document.getElementById('details-modal').style.display = 'flex';
+    
+    // Clear any existing content first to prevent blur
+    const modal = document.getElementById('details-modal');
+    const content = modal.querySelector('.details-container');
+    if (content) {
+        content.style.opacity = '0';
+    }
+    
+    // Show modal immediately
+    modal.style.display = 'flex';
+    
+    // Refresh content with slight delay for smooth transition
+    requestAnimationFrame(() => {
+        refreshDetailsModal(project);
+        if (content) {
+            content.style.opacity = '1';
+        }
+    });
 }
 
 function refreshDetailsModal(project) {
@@ -1944,8 +1984,22 @@ function createCalendarEvent(item, date) {
 }
 
 function hasTaskDeadlineOnDate(task, date) {
-    const taskDeadline = new Date(task.deadline + 'T00:00:00');
-    return formatDateForComparison(taskDeadline) === formatDateForComparison(date);
+    if (!task.deadline) return false;
+    
+    try {
+        // Handle both date strings and Date objects
+        const taskDeadline = new Date(task.deadline + 'T00:00:00');
+        
+        if (isNaN(taskDeadline.getTime())) {
+            console.error('[CALENDAR] Invalid task deadline:', task.deadline);
+            return false;
+        }
+        
+        return formatDateForComparison(taskDeadline) === formatDateForComparison(date);
+    } catch (error) {
+        console.error('[CALENDAR] Error parsing task deadline:', error);
+        return false;
+    }
 }
 
 function hasProjectDeadlineOnDate(project, date) {
@@ -1955,19 +2009,43 @@ function hasProjectDeadlineOnDate(project, date) {
     
     const deadlineTypes = ['contact', 'interview', 'draft', 'review', 'edits'];
     
+    // Check intermediate deadlines
     for (const type of deadlineTypes) {
         if (deadlines[type]) {
-            const deadlineDate = new Date(deadlines[type] + 'T00:00:00');
-            if (formatDateForComparison(deadlineDate) === dateStr) {
-                return true;
+            try {
+                const deadlineDate = new Date(deadlines[type] + 'T00:00:00');
+                
+                if (isNaN(deadlineDate.getTime())) {
+                    console.error('[CALENDAR] Invalid deadline for type:', type, deadlines[type]);
+                    continue;
+                }
+                
+                if (formatDateForComparison(deadlineDate) === dateStr) {
+                    return true;
+                }
+            } catch (error) {
+                console.error('[CALENDAR] Error parsing deadline:', error);
+                continue;
             }
         }
     }
     
+    // Check final publication deadline
     if (finalDeadline) {
-        const publicationDate = new Date(finalDeadline + 'T00:00:00');
-        if (formatDateForComparison(publicationDate) === dateStr) {
-            return true;
+        try {
+            const publicationDate = new Date(finalDeadline + 'T00:00:00');
+            
+            if (isNaN(publicationDate.getTime())) {
+                console.error('[CALENDAR] Invalid publication deadline:', finalDeadline);
+                return false;
+            }
+            
+            if (formatDateForComparison(publicationDate) === dateStr) {
+                return true;
+            }
+        } catch (error) {
+            console.error('[CALENDAR] Error parsing publication deadline:', error);
+            return false;
         }
     }
     
@@ -2004,6 +2082,11 @@ function getEventTypeForDate(project, date) {
 }
 
 function formatDateForComparison(date) {
+    if (!date || isNaN(date.getTime())) {
+        console.error('[CALENDAR] Invalid date for comparison:', date);
+        return '';
+    }
+    
     return date.getFullYear() + '-' + 
            String(date.getMonth() + 1).padStart(2, '0') + '-' +
            String(date.getDate()).padStart(2, '0');
@@ -2016,45 +2099,89 @@ function isSameDay(date1, date2) {
 }
 
 function updateCalendarStats() {
+    console.log('[CALENDAR] Updating calendar statistics');
+    
     const now = new Date();
+    now.setHours(0, 0, 0, 0); // Normalize to start of day
+    
     const monthStart = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1);
+    monthStart.setHours(0, 0, 0, 0);
+    
     const monthEnd = new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0);
+    monthEnd.setHours(23, 59, 59, 999);
     
     const weekStart = new Date(now);
     weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+    
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
     
     let thisMonthCount = 0;
     let thisWeekCount = 0;
     let overdueCount = 0;
     
+    // Count project deadlines
     allProjects.forEach(project => {
         const deadlines = project.deadlines || {};
         const finalDeadline = deadlines.publication || project.deadline;
         
+        // Check final publication deadline
         if (finalDeadline) {
-            const deadline = new Date(finalDeadline + 'T00:00:00');
-            
-            if (deadline >= monthStart && deadline <= monthEnd) {
-                thisMonthCount++;
-            }
-            
-            if (deadline >= weekStart && deadline <= weekEnd) {
-                thisWeekCount++;
-            }
-            
-            const state = getProjectState(project, currentView, currentUser);
-            if (deadline < now && state.column !== 'Completed') {
-                overdueCount++;
+            try {
+                const deadline = new Date(finalDeadline + 'T00:00:00');
+                
+                if (!isNaN(deadline.getTime())) {
+                    if (deadline >= monthStart && deadline <= monthEnd) {
+                        thisMonthCount++;
+                    }
+                    
+                    if (deadline >= weekStart && deadline <= weekEnd) {
+                        thisWeekCount++;
+                    }
+                    
+                    const state = getProjectState(project, currentView, currentUser);
+                    if (deadline < now && state.column !== 'Completed' && !state.statusText.includes('Completed')) {
+                        overdueCount++;
+                    }
+                }
+            } catch (error) {
+                console.error('[CALENDAR STATS] Error parsing final deadline:', error);
             }
         }
         
+        // Count intermediate deadlines
         const deadlineTypes = ['contact', 'interview', 'draft', 'review', 'edits'];
         deadlineTypes.forEach(type => {
             if (deadlines[type]) {
-                const deadline = new Date(deadlines[type] + 'T00:00:00');
-                
+                try {
+                    const deadline = new Date(deadlines[type] + 'T00:00:00');
+                    
+                    if (!isNaN(deadline.getTime())) {
+                        if (deadline >= monthStart && deadline <= monthEnd) {
+                            thisMonthCount++;
+                        }
+                        
+                        if (deadline >= weekStart && deadline <= weekEnd) {
+                            thisWeekCount++;
+                        }
+                    }
+                } catch (error) {
+                    console.error('[CALENDAR STATS] Error parsing deadline type:', type, error);
+                }
+            }
+        });
+    });
+    
+    // Count task deadlines
+    allTasks.forEach(task => {
+        if (!task.deadline) return;
+        
+        try {
+            const deadline = new Date(task.deadline + 'T00:00:00');
+            
+            if (!isNaN(deadline.getTime())) {
                 if (deadline >= monthStart && deadline <= monthEnd) {
                     thisMonthCount++;
                 }
@@ -2062,25 +2189,17 @@ function updateCalendarStats() {
                 if (deadline >= weekStart && deadline <= weekEnd) {
                     thisWeekCount++;
                 }
+                
+                if (deadline < now && task.status !== 'completed') {
+                    overdueCount++;
+                }
             }
-        });
+        } catch (error) {
+            console.error('[CALENDAR STATS] Error parsing task deadline:', error);
+        }
     });
     
-    allTasks.forEach(task => {
-        const deadline = new Date(task.deadline + 'T00:00:00');
-        
-        if (deadline >= monthStart && deadline <= monthEnd) {
-            thisMonthCount++;
-        }
-        
-        if (deadline >= weekStart && deadline <= weekEnd) {
-            thisWeekCount++;
-        }
-        
-        if (deadline < now && task.status !== 'completed') {
-            overdueCount++;
-        }
-    });
+    console.log('[CALENDAR STATS] Month:', thisMonthCount, 'Week:', thisWeekCount, 'Overdue:', overdueCount);
     
     const statMonth = document.getElementById('stat-month');
     const statWeek = document.getElementById('stat-week');
@@ -2176,7 +2295,18 @@ function setupCalendarKeyboardNavigation() {
 //  Modals
 // ==================
 function closeAllModals() {
-    document.querySelectorAll('.modal-overlay').forEach(modal => modal.style.display = 'none');
+    console.log('[MODAL] Closing all modals');
+    
+    // Reset opacity on all modal contents
+    document.querySelectorAll('.modal-overlay .details-container').forEach(content => {
+        content.style.opacity = '1';
+    });
+    
+    // Hide all modals
+    document.querySelectorAll('.modal-overlay').forEach(modal => {
+        modal.style.display = 'none';
+    });
+    
     currentlyViewedProjectId = null;
     currentlyViewedTaskId = null;
     disableProposalEditing();
@@ -2186,23 +2316,65 @@ function closeAllModals() {
 //  Status Reports
 // ==================
 function generateStatusReport() {
+    console.log('[REPORT] Generating status report');
+    
     const reportModal = document.getElementById('report-modal');
     const reportContent = document.getElementById('report-content');
-    if (!reportModal || !reportContent) return;
+    if (!reportModal || !reportContent) {
+        console.error('[REPORT] Modal elements not found');
+        return;
+    }
 
     const now = new Date();
+    now.setHours(0, 0, 0, 0); // Normalize to start of day
     
+    // Filter overdue projects with proper date handling
     const overdueProjects = allProjects.filter(p => {
         const finalDeadline = p.deadlines ? p.deadlines.publication : p.deadline;
-        return finalDeadline && new Date(finalDeadline) < now && getProjectState(p, currentView, currentUser).column !== 'Completed';
+        if (!finalDeadline) return false;
+        
+        try {
+            const deadline = new Date(finalDeadline + 'T00:00:00');
+            if (isNaN(deadline.getTime())) return false;
+            
+            const state = getProjectState(p, currentView, currentUser);
+            return deadline < now && 
+                   state.column !== 'Completed' && 
+                   !state.statusText.includes('Completed');
+        } catch (error) {
+            console.error('[REPORT] Error checking project deadline:', error);
+            return false;
+        }
     });
 
     const pendingProposals = allProjects.filter(p => p.proposalStatus === 'pending');
-    const completedProjects = allProjects.filter(p => getProjectState(p, currentView, currentUser).column === 'Completed');
+    const completedProjects = allProjects.filter(p => {
+        const state = getProjectState(p, currentView, currentUser);
+        return state.column === 'Completed' || state.statusText.includes('Completed');
+    });
     
-    const overdueTasks = allTasks.filter(t => new Date(t.deadline) < now && t.status !== 'completed');
+    // Filter overdue tasks with proper date handling
+    const overdueTasks = allTasks.filter(t => {
+        if (!t.deadline) return false;
+        
+        try {
+            const deadline = new Date(t.deadline + 'T00:00:00');
+            if (isNaN(deadline.getTime())) return false;
+            
+            return deadline < now && t.status !== 'completed';
+        } catch (error) {
+            console.error('[REPORT] Error checking task deadline:', error);
+            return false;
+        }
+    });
+    
     const pendingTasks = allTasks.filter(t => t.status === 'pending');
     const completedTasks = allTasks.filter(t => t.status === 'completed');
+    const inProgressTasks = allTasks.filter(t => t.status === 'approved');
+    
+    console.log('[REPORT] Overdue projects:', overdueProjects.length);
+    console.log('[REPORT] Overdue tasks:', overdueTasks.length);
+    console.log('[REPORT] Pending proposals:', pendingProposals.length);
     
     let reportHTML = `
         <div class="report-section executive-summary">
@@ -2243,54 +2415,96 @@ function generateStatusReport() {
                     <div class="summary-label">Completed Tasks</div>
                 </div>
                 <div class="summary-item">
-                    <div class="summary-value">${allTasks.filter(t => t.status === 'approved').length}</div>
+                    <div class="summary-value">${inProgressTasks.length}</div>
                     <div class="summary-label">In Progress</div>
                 </div>
             </div>
         </div>
     `;
 
+    // Actions Required Section
     if (overdueProjects.length > 0 || overdueTasks.length > 0 || pendingProposals.length > 0) {
         reportHTML += `
             <div class="report-section">
                 <h2>🚨 Actions Required</h2>
-                ${overdueProjects.length > 0 ? `<h3>Overdue Projects (${overdueProjects.length})</h3>` : ''}
-                ${overdueProjects.map(p => {
-                    const deadline = p.deadlines ? p.deadlines.publication : p.deadline;
-                    const daysPast = Math.ceil((now - new Date(deadline)) / (1000 * 60 * 60 * 24));
-                    return `
-                        <div class="report-item overdue-item" data-id="${p.id}">
-                            <span>${p.title}</span>
-                            <span class="meta">${daysPast} days overdue</span>
-                        </div>
-                    `;
-                }).join('')}
+        `;
+        
+        // Overdue Projects
+        if (overdueProjects.length > 0) {
+            reportHTML += `<h3>Overdue Projects (${overdueProjects.length})</h3>`;
+            reportHTML += overdueProjects.map(p => {
+                const deadline = p.deadlines ? p.deadlines.publication : p.deadline;
+                let daysPast = 0;
                 
-                ${overdueTasks.length > 0 ? `<h3>Overdue Tasks (${overdueTasks.length})</h3>` : ''}
-                ${overdueTasks.map(t => {
-                    const daysPast = Math.ceil((now - new Date(t.deadline)) / (1000 * 60 * 60 * 24));
-                    const assigneeNames = getTaskAssigneeNames(t);
-                    return `
-                        <div class="report-item overdue-item" data-id="${t.id}" data-type="task">
-                            <span>${t.title} (assigned to ${assigneeNames.join(', ')})</span>
-                            <span class="meta">${daysPast} days overdue</span>
-                        </div>
-                    `;
-                }).join('')}
+                try {
+                    const deadlineDate = new Date(deadline + 'T00:00:00');
+                    if (!isNaN(deadlineDate.getTime())) {
+                        daysPast = Math.ceil((now - deadlineDate) / (1000 * 60 * 60 * 24));
+                    }
+                } catch (error) {
+                    console.error('[REPORT] Error calculating days past:', error);
+                }
                 
-                ${pendingProposals.length > 0 ? `<h3>Pending Proposals (${pendingProposals.length})</h3>` : ''}
-                ${pendingProposals.map(p => `
-                    <div class="report-item pending-item" data-id="${p.id}">
-                        <span>${p.title}</span>
-                        <span class="meta">by ${p.authorName}</span>
+                return `
+                    <div class="report-item overdue-item" data-id="${p.id}">
+                        <span>${escapeHtml(p.title)}</span>
+                        <span class="meta">${daysPast} day${daysPast !== 1 ? 's' : ''} overdue</span>
                     </div>
-                `).join('')}
+                `;
+            }).join('');
+        }
+        
+        // Overdue Tasks
+        if (overdueTasks.length > 0) {
+            reportHTML += `<h3>Overdue Tasks (${overdueTasks.length})</h3>`;
+            reportHTML += overdueTasks.map(t => {
+                let daysPast = 0;
+                
+                try {
+                    const deadlineDate = new Date(t.deadline + 'T00:00:00');
+                    if (!isNaN(deadlineDate.getTime())) {
+                        daysPast = Math.ceil((now - deadlineDate) / (1000 * 60 * 60 * 24));
+                    }
+                } catch (error) {
+                    console.error('[REPORT] Error calculating task days past:', error);
+                }
+                
+                const assigneeNames = getTaskAssigneeNames(t);
+                return `
+                    <div class="report-item overdue-item" data-id="${t.id}" data-type="task">
+                        <span>${escapeHtml(t.title)} (assigned to ${escapeHtml(assigneeNames.join(', '))})</span>
+                        <span class="meta">${daysPast} day${daysPast !== 1 ? 's' : ''} overdue</span>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Pending Proposals
+        if (pendingProposals.length > 0) {
+            reportHTML += `<h3>Pending Proposals (${pendingProposals.length})</h3>`;
+            reportHTML += pendingProposals.map(p => `
+                <div class="report-item pending-item" data-id="${p.id}">
+                    <span>${escapeHtml(p.title)}</span>
+                    <span class="meta">by ${escapeHtml(p.authorName)}</span>
+                </div>
+            `).join('');
+        }
+        
+        reportHTML += `</div>`;
+    } else {
+        reportHTML += `
+            <div class="report-section">
+                <div style="text-align: center; padding: 40px; color: #10b981;">
+                    <h2>✅ All Clear!</h2>
+                    <p style="margin-top: 12px; color: #64748b;">No overdue items or pending approvals at this time.</p>
+                </div>
             </div>
         `;
     }
 
     reportContent.innerHTML = reportHTML;
 
+    // Add click handlers to report items
     reportContent.querySelectorAll('[data-id]').forEach(item => {
         item.addEventListener('click', () => {
             closeAllModals();
@@ -2303,6 +2517,7 @@ function generateStatusReport() {
     });
 
     reportModal.style.display = 'flex';
+    console.log('[REPORT] Status report displayed successfully');
 }
 
 // ==================
