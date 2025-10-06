@@ -423,10 +423,30 @@ function setupNavAndListeners() {
 
     // Modal close listeners
     document.querySelectorAll('.modal-overlay').forEach(modal => {
+        // Remove any existing listeners first
+        const newModal = modal.cloneNode(true);
+        modal.parentNode.replaceChild(newModal, modal);
+    });
+    
+    // Re-attach listeners to fresh modals
+    document.querySelectorAll('.modal-overlay').forEach(modal => {
         modal.addEventListener('click', e => {
-            if (e.target.classList.contains('modal-overlay') || e.target.classList.contains('close-button')) {
+            // Only close if clicking directly on overlay or close button
+            if (e.target === modal || e.target.classList.contains('close-button')) {
+                e.preventDefault();
+                e.stopPropagation();
                 closeAllModals();
             }
+        });
+        
+        // Close button handler
+        const closeButtons = modal.querySelectorAll('.close-button');
+        closeButtons.forEach(btn => {
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                closeAllModals();
+            });
         });
     });
     
@@ -980,6 +1000,7 @@ function createTaskCard(task) {
     card.className = 'kanban-card';
     card.classList.add(`priority-${task.priority || 'medium'}`);
     card.dataset.id = task.id;
+    card.dataset.type = 'task';
     
     const isOverdue = new Date(task.deadline) < new Date() && task.status !== 'completed';
     const isDueSoon = !isOverdue && new Date(task.deadline) < new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
@@ -1039,11 +1060,20 @@ function createTaskCard(task) {
         </div>
     `;
     
-    card.addEventListener('click', () => openTaskDetailsModal(task.id));
+    // Prevent event bubbling issues
+    card.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('[CARD CLICK] Opening task:', task.id);
+        openTaskDetailsModal(task.id);
+    });
+    
     return card;
 }
 
 function openTaskDetailsModal(taskId) {
+    console.log('[MODAL] Opening task details for:', taskId);
+    
     const task = allTasks.find(t => t.id === taskId);
     if (!task) {
         console.error('[MODAL] Task not found:', taskId);
@@ -1051,33 +1081,72 @@ function openTaskDetailsModal(taskId) {
         return;
     }
     
-    console.log('[MODAL] Opening details for task:', task.title);
-    currentlyViewedTaskId = taskId;
+    // CRITICAL: Ensure all modals are completely closed first
+    closeAllModals();
     
-    // Clear any existing content first to prevent blur
-    const modal = document.getElementById('task-details-modal');
-    const content = modal.querySelector('.details-container');
-    if (content) {
-        content.style.opacity = '0';
-    }
-    
-    // Show modal immediately
-    modal.style.display = 'flex';
-    
-    // Refresh content with slight delay for smooth transition
-    requestAnimationFrame(() => {
-        refreshTaskDetailsModal(task);
-        if (content) {
-            content.style.opacity = '1';
+    // Wait a brief moment to ensure close is complete
+    setTimeout(() => {
+        console.log('[MODAL] Setting up task modal for:', task.title);
+        currentlyViewedTaskId = taskId;
+        
+        const modal = document.getElementById('task-details-modal');
+        if (!modal) {
+            console.error('[MODAL] Task modal element not found');
+            return;
         }
-    });
+        
+        const content = modal.querySelector('.details-container');
+        
+        // Force reset the content state
+        if (content) {
+            content.style.opacity = '0';
+            content.style.transition = 'none';
+            content.style.display = 'flex'; // Ensure it's visible
+        }
+        
+        // Show modal
+        modal.style.display = 'flex';
+        
+        // Force a reflow to ensure styles are applied
+        void modal.offsetHeight;
+        
+        // Populate content immediately
+        refreshTaskDetailsModal(task);
+        
+        // Re-enable transition and fade in
+        requestAnimationFrame(() => {
+            if (content) {
+                content.style.transition = 'opacity 0.2s ease-in-out';
+                content.style.opacity = '1';
+            }
+        });
+        
+        console.log('[MODAL] Task modal opened successfully');
+    }, 100); // Small delay to ensure clean state
 }
 
 function refreshTaskDetailsModal(task) {
-    document.getElementById('task-details-title').textContent = task.title;
-    document.getElementById('task-details-description').textContent = task.description || 'No description provided.';
-    document.getElementById('task-details-status').textContent = (task.status || 'pending').replace('_', ' ').toUpperCase();
-    document.getElementById('task-details-creator').textContent = task.creatorName;
+    console.log('[MODAL REFRESH] Refreshing task details for:', task.title);
+    
+    // Ensure all elements exist before populating
+    const titleEl = document.getElementById('task-details-title');
+    const descEl = document.getElementById('task-details-description');
+    const statusEl = document.getElementById('task-details-status');
+    const creatorEl = document.getElementById('task-details-creator');
+    const assigneeEl = document.getElementById('task-details-assignee');
+    const createdEl = document.getElementById('task-details-created');
+    const deadlineEl = document.getElementById('task-details-deadline');
+    const priorityEl = document.getElementById('task-details-priority');
+    
+    if (!titleEl || !descEl || !statusEl || !creatorEl || !assigneeEl || !createdEl || !deadlineEl || !priorityEl) {
+        console.error('[MODAL REFRESH] Required task elements not found in DOM');
+        return;
+    }
+    
+    titleEl.textContent = task.title;
+    descEl.textContent = task.description || 'No description provided.';
+    statusEl.textContent = (task.status || 'pending').replace('_', ' ').toUpperCase();
+    creatorEl.textContent = task.creatorName;
     
     // Handle multiple assignees in details
     const assigneeElement = document.getElementById('task-details-assignee');
@@ -1329,6 +1398,8 @@ function openProjectModal() {
 }
 
 function openDetailsModal(projectId) {
+    console.log('[MODAL] Opening project details for:', projectId);
+    
     const project = allProjects.find(p => p.id === projectId);
     if (!project) {
         console.error('[MODAL] Project not found:', projectId);
@@ -1336,39 +1407,77 @@ function openDetailsModal(projectId) {
         return;
     }
     
-    console.log('[MODAL] Opening details for project:', project.title);
-    currentlyViewedProjectId = projectId;
+    // CRITICAL: Ensure all modals are completely closed first
+    closeAllModals();
     
-    // Clear any existing content first to prevent blur
-    const modal = document.getElementById('details-modal');
-    const content = modal.querySelector('.details-container');
-    if (content) {
-        content.style.opacity = '0';
-    }
-    
-    // Show modal immediately
-    modal.style.display = 'flex';
-    
-    // Refresh content with slight delay for smooth transition
-    requestAnimationFrame(() => {
-        refreshDetailsModal(project);
-        if (content) {
-            content.style.opacity = '1';
+    // Wait a brief moment to ensure close is complete
+    setTimeout(() => {
+        console.log('[MODAL] Setting up project modal for:', project.title);
+        currentlyViewedProjectId = projectId;
+        
+        const modal = document.getElementById('details-modal');
+        if (!modal) {
+            console.error('[MODAL] Modal element not found');
+            return;
         }
-    });
+        
+        const content = modal.querySelector('.details-container');
+        
+        // Force reset the content state
+        if (content) {
+            content.style.opacity = '0';
+            content.style.transition = 'none';
+            content.style.display = 'flex'; // Ensure it's visible
+        }
+        
+        // Show modal
+        modal.style.display = 'flex';
+        
+        // Force a reflow to ensure styles are applied
+        void modal.offsetHeight;
+        
+        // Populate content immediately
+        refreshDetailsModal(project);
+        
+        // Re-enable transition and fade in
+        requestAnimationFrame(() => {
+            if (content) {
+                content.style.transition = 'opacity 0.2s ease-in-out';
+                content.style.opacity = '1';
+            }
+        });
+        
+        console.log('[MODAL] Project modal opened successfully');
+    }, 100); // Small delay to ensure clean state
 }
 
 function refreshDetailsModal(project) {
+    console.log('[MODAL REFRESH] Refreshing project details for:', project.title);
+    
+    // Ensure all elements exist before populating
+    const titleEl = document.getElementById('details-title');
+    const authorEl = document.getElementById('details-author');
+    const editorEl = document.getElementById('details-editor');
+    const statusEl = document.getElementById('details-status');
+    const deadlineEl = document.getElementById('details-publication-deadline');
+    const proposalEl = document.getElementById('details-proposal');
+    
+    if (!titleEl || !authorEl || !editorEl || !statusEl || !deadlineEl || !proposalEl) {
+        console.error('[MODAL REFRESH] Required elements not found in DOM');
+        return;
+    }
+    
     const isAuthor = currentUser.uid === project.authorId;
     const isEditor = currentUser.uid === project.editorId;
     const isAdmin = currentUserRole === 'admin';
     
-    document.getElementById('details-title').textContent = project.title;
-    document.getElementById('details-author').textContent = project.authorName;
-    document.getElementById('details-editor').textContent = project.editorName || 'Not Assigned';
+    // Set basic info
+    titleEl.textContent = project.title;
+    authorEl.textContent = project.authorName;
+    editorEl.textContent = project.editorName || 'Not Assigned';
     
     const state = getProjectState(project, currentView, currentUser);
-    document.getElementById('details-status').textContent = state.statusText;
+    statusEl.textContent = state.statusText;
 
     const finalDeadline = project.deadlines ? project.deadlines.publication : project.deadline;
     if (finalDeadline) {
@@ -1744,6 +1853,7 @@ function createProjectCard(project) {
     
     card.className = `kanban-card status-${state.color}`;
     card.dataset.id = project.id;
+    card.dataset.type = 'project';
     
     const progress = calculateProgress(project.timeline);
     
@@ -1777,7 +1887,14 @@ function createProjectCard(project) {
         </div>
     `;
     
-    card.addEventListener('click', () => openDetailsModal(project.id));
+    // Prevent event bubbling issues
+    card.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('[CARD CLICK] Opening project:', project.id);
+        openDetailsModal(project.id);
+    });
+    
     return card;
 }
 
@@ -2297,19 +2414,34 @@ function setupCalendarKeyboardNavigation() {
 function closeAllModals() {
     console.log('[MODAL] Closing all modals');
     
-    // Reset opacity on all modal contents
-    document.querySelectorAll('.modal-overlay .details-container').forEach(content => {
-        content.style.opacity = '1';
-    });
+    // Get all modals
+    const modals = document.querySelectorAll('.modal-overlay');
     
-    // Hide all modals
-    document.querySelectorAll('.modal-overlay').forEach(modal => {
+    modals.forEach(modal => {
+        // Reset opacity immediately on all content
+        const detailsContainers = modal.querySelectorAll('.details-container');
+        detailsContainers.forEach(content => {
+            content.style.opacity = '1';
+            content.style.transition = 'none'; // Remove transition during close
+        });
+        
+        // Hide modal
         modal.style.display = 'none';
+        
+        // Reset transition after a brief delay
+        setTimeout(() => {
+            detailsContainers.forEach(content => {
+                content.style.transition = 'opacity 0.2s ease-in-out';
+            });
+        }, 50);
     });
     
+    // Clear state
     currentlyViewedProjectId = null;
     currentlyViewedTaskId = null;
     disableProposalEditing();
+    
+    console.log('[MODAL] All modals closed and reset');
 }
 
 // ==================
